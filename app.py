@@ -20,31 +20,37 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # ————————————————
 @st.cache_data(show_spinner=False, ttl=3600)
 def generate_queries_via_api(roles, industries, locations, engines, site_filters):
+    # Format the user inputs into OR‑separated quoted lists
+    roles_fmt      = " OR ".join(f'"{r}"' for r in roles)
+    industries_fmt = " OR ".join(f'"{i}"' for i in industries)
+    locations_fmt  = " OR ".join(f'"{l}"' for l in locations)
+
     prompt = f"""
-You are an expert OSINT engineer. Generate 5 concise, _full_ Boolean search strings for each engine in {engines}, matching this pattern:
+You are an expert OSINT engineer. Using exactly the Roles, Industries and Locations provided below,
+generate 5 full Boolean search strings for each of these engines: {engines}.  
+Each string must follow this structure:
 
-  • site:linkedin.com/in intitle:(“Role1” OR “Role2”) AND (“Industry1” OR “Industry2”) AND “Location”
+  [site:domain if site_filter != "(any)"] intitle:({roles_fmt}) AND ({industries_fmt}) AND ({locations_fmt})
 
-Example for “Music Supervisor, Audio Director” in “Advertising, Film” for “United States” on Google:
+– Use the site: filter only when a site_filter is not "(any)".  
+– Always wrap each value in quotes, use OR between list items, and AND between the three groups.  
+– Do NOT invent or substitute any other job titles, industries, or locations.
 
-  site:linkedin.com/in intitle:(“Music Supervisor” OR “Audio Director”) AND (“Advertising” OR “Film”) AND “United States”
-
-Now produce 5 queries _exactly_ like that for each engine and each domain in {site_filters}. Return valid JSON in this shape:
+Return valid JSON mapping each engine to a dict of site_filter→list of strings, e.g.:
 
 {{
   "google": {{
-    "": ["site:linkedin.com/in intitle:(“Role1” OR “Role2”) AND (“Industry1” OR “Industry2”) AND “Location”", …],
-    "linkedin.com/in": ["…"],
-    "productionhub.com": ["…"]
+    "":    ["…global query…", …],
+    "linkedin.com/in": ["…linkedin query…"]
   }},
-  "bing": {{ … }},
-  "duckduckgo": {{ … }}
+  "bing": {{ /* same shape */ }},
+  "duckduckgo": {{ /* same shape */ }}
 }}
 """
     resp = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
+        temperature=0.0,
     )
     return json.loads(resp.choices[0].message.content)
 
@@ -67,21 +73,17 @@ def run_query_builder():
     locations = st.text_input("Locations", "United States,UK")
 
     if st.button("Generate Queries"):
-        # Validation guard
-        if not roles.strip() or not industries.strip() or not locations.strip():
-            st.error("Please fill in Roles, Industries, and Locations before generating queries.")
+        # ensure inputs are not empty
+        if not (roles.strip() and industries.strip() and locations.strip()):
+            st.error("Please fill in Roles, Industries, and Locations.")
             return
 
         role_list = [r.strip() for r in roles.split(",") if r.strip()]
-        ind_list = [i.strip() for i in industries.split(",") if i.strip()]
-        loc_list = [l.strip() for l in locations.split(",") if l.strip()]
+        ind_list  = [i.strip() for i in industries.split(",") if i.strip()]
+        loc_list  = [l.strip() for l in locations.split(",") if l.strip()]
 
         results = generate_queries_via_api(
-            role_list,
-            ind_list,
-            loc_list,
-            engines,
-            site_filters
+            role_list, ind_list, loc_list, engines, site_filters
         )
 
         for eng, buckets in results.items():
@@ -104,7 +106,12 @@ def run_query_builder():
 # ————————————————
 def get_tags(title, artist, year, token):
     url = "https://api.discogs.com/database/search"
-    params = {"artist": artist, "release_title": title, "year": year, "token": token}
+    params = {
+        "artist": title,
+        "release_title": artist,
+        "year": year,
+        "token": token
+    }
     try:
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
@@ -116,13 +123,13 @@ def get_tags(title, artist, year, token):
                 tags.extend(vals)
             elif vals:
                 tags.append(vals)
+        # dedupe
         seen = set()
         clean = []
         for t in tags:
-            ts = str(t).strip()
-            if ts and ts not in seen:
-                seen.add(ts)
-                clean.append(ts)
+            if t and t not in seen:
+                seen.add(t)
+                clean.append(t)
         return ", ".join(clean)
     except Exception:
         return ""
@@ -136,17 +143,20 @@ def run_udio_tag_builder():
     df = None
 
     if mode == "Upload CSV":
-        up = st.file_uploader("CSV file", type=["csv"])
-        if up:
-            df = pd.read_csv(up)
+        uploaded = st.file_uploader("CSV file", type=["csv"])
+        if uploaded:
+            df = pd.read_csv(uploaded)
     else:
-        txt = st.text_area("Paste lines like title,artist,year")
-        if txt:
-            rows = [l.split(",") for l in txt.splitlines() if l.strip()]
+        pasted = st.text_area("Paste lines like title,artist,year")
+        if pasted:
+            rows = [line.split(",") for line in pasted.splitlines() if line.strip()]
             df = pd.DataFrame(rows, columns=["title", "artist", "year"])
 
     if df is not None and st.button("Build Tags"):
-        df["tags"] = df.apply(lambda x: get_tags(x.title, x.artist, x.year, token), axis=1)
+        df["tags"] = df.apply(
+            lambda x: get_tags(x["title"], x["artist"], x["year"], token),
+            axis=1
+        )
         st.dataframe(df)
         st.download_button("Download prompts.csv", df.to_csv(index=False), "prompts.csv")
 
