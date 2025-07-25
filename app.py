@@ -34,14 +34,14 @@ Instructions:
 {{
   "google": {{
     "": ["global query1", "global query2", ...],
-    "linkedin.com/in": ["..."],
-    "productionhub.com": ["..."]
+    "linkedin.com/in": ["…linkedin queries…"],
+    "productionhub.com": ["…directory queries…"]
   }},
   "bing": {{ ... }},
   "duckduckgo": {{ ... }}
 }}
 """
-    resp = openai.ChatCompletion.create(
+    resp = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
@@ -78,91 +78,7 @@ def run_query_builder():
 
 
 # ————————————————
-#  2) DIY Lead Generation (fall‑back, local)
-# ————————————————
-def generate_boolean_queries(titles, industries, locations):
-    queries = []
-    for t in titles:
-        for i in industries:
-            for l in locations:
-                queries.append(f'site:linkedin.com/in intitle:"{t.strip()}" "{i.strip()}" "{l.strip()}"')
-    return queries
-
-def scrape_team_page(url):
-    contacts = []
-    try:
-        r = requests.get(url, timeout=5)
-        soup = BeautifulSoup(r.text, "html.parser")
-        domain = url.split("//")[-1].split("/")[0]
-        for member in soup.select(".team-member"):
-            name_el = member.select_one(".name")
-            role_el = member.select_one(".role")
-            mail_el = member.select_one("a[href^='mailto:']")
-            name = name_el.get_text(strip=True) if name_el else ""
-            role = role_el.get_text(strip=True) if role_el else ""
-            email = mail_el["href"].split(":",1)[1] if mail_el else ""
-            contacts.append({"name":name, "role":role, "company_domain":domain, "email":email})
-    except Exception:
-        pass
-    return contacts
-
-def permute_emails(first, last, domain):
-    patterns = ["{f}.{l}@{d}", "{f}{l}@{d}", "{f}@{d}", "{fi}{l}@{d}"]
-    f, l = first.lower(), last.lower()
-    fi = f[:1]
-    return {
-        p.format(f=f, l=l, fi=fi, d=domain)
-        for p in patterns
-    }
-
-def verify_email(email):
-    try:
-        dns.resolver.resolve(email.split("@")[1], "MX")
-        return True
-    except:
-        return False
-
-def assemble_contacts(raw):
-    rows = []
-    for c in raw:
-        parts = c["name"].split()
-        first, last = (parts + [""])[:2]
-        candidates = permute_emails(first, last, c["company_domain"])
-        valid = [e for e in candidates if verify_email(e)]
-        chosen = valid[0] if valid else c["email"]
-        rows.append({
-            "name": c["name"],
-            "role": c["role"],
-            "company_domain": c["company_domain"],
-            "email": chosen
-        })
-    return pd.DataFrame(rows)
-
-
-def run_lead_generation():
-    st.header("🧩 DIY Lead Generation")
-    sub = st.radio("Function", ["Boolean Queries", "Team‑Page Scraper"])
-    if sub == "Boolean Queries":
-        titles = st.text_input("Titles (comma‑sep)", "Music Supervisor,Audio Director").split(",")
-        industries = st.text_input("Industries", "Advertising,Film").split(",")
-        locations = st.text_input("Locations", "United States").split(",")
-        if st.button("Generate DIY Queries"):
-            qs = generate_boolean_queries(titles, industries, locations)
-            for q in qs:
-                st.code(q)
-    else:
-        urls = st.text_area("Team Page URLs (one per line)").splitlines()
-        if st.button("Scrape Team Pages"):
-            raw = []
-            for u in urls:
-                raw.extend(scrape_team_page(u))
-            df = assemble_contacts(raw)
-            st.dataframe(df)
-            st.download_button("Download leads.csv", df.to_csv(index=False), "leads.csv")
-
-
-# ————————————————
-# 3) Udio‑Tag Builder (unchanged)
+#  2) Udio‑Tag Builder
 # ————————————————
 def get_tags(title, artist, year, token):
     url = "https://api.discogs.com/database/search"
@@ -172,7 +88,7 @@ def get_tags(title, artist, year, token):
         r.raise_for_status()
         res = r.json().get("results", [])[0]
         tags = []
-        for key in ("style","genre","format","label"):
+        for key in ("style", "genre", "format", "label"):
             vals = res.get(key)
             if isinstance(vals, list):
                 tags += vals
@@ -193,11 +109,11 @@ def run_udio_tag_builder():
     st.markdown("Upload a CSV (title,artist,year) or paste lines.")
     mode = st.radio("", ["Upload CSV","Paste Data"])
     df = None
-    if mode=="Upload CSV":
+    if mode == "Upload CSV":
         up = st.file_uploader("CSV file", type=["csv"])
         if up: df = pd.read_csv(up)
     else:
-        txt = st.text_area("paste lines like title,artist,year")
+        txt = st.text_area("Paste lines like title,artist,year")
         if txt:
             rows = [l.split(",") for l in txt.splitlines() if l.strip()]
             df = pd.DataFrame(rows, columns=["title","artist","year"])
@@ -208,20 +124,14 @@ def run_udio_tag_builder():
 
 
 # ————————————————
-# Main app routing
+#  Main routing
 # ————————————————
 def main():
-    st.set_page_config(page_title="Discogs→Udio & Lead Gen", layout="wide")
+    st.set_page_config(page_title="Discogs→Udio", layout="wide")
     st.sidebar.header("Tool Module")
-    module = st.sidebar.selectbox("Choose module", [
-        "Search Tools",
-        "DIY Lead Generation",
-        "Udio Tags"
-    ])
+    module = st.sidebar.selectbox("Choose module", ["Search Tools", "Udio Tags"])
     if module == "Search Tools":
         run_query_builder()
-    elif module == "DIY Lead Generation":
-        run_lead_generation()
     else:
         run_udio_tag_builder()
 
