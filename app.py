@@ -21,7 +21,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 @st.cache_data(show_spinner=False, ttl=3600)
 def generate_queries_via_api(roles, industries, locations, engines, site_filters):
     prompt = f"""
-You are an expert OSINT engineer.  Generate 5 concise, _full_ Boolean search strings for each engine in {engines}, matching this pattern:
+You are an expert OSINT engineer. Generate 5 concise, _full_ Boolean search strings for each engine in {engines}, matching this pattern:
 
   • site:linkedin.com/in intitle:(“Role1” OR “Role2”) AND (“Industry1” OR “Industry2”) AND “Location”
 
@@ -29,15 +29,18 @@ Example for “Music Supervisor, Audio Director” in “Advertising, Film” fo
 
   site:linkedin.com/in intitle:(“Music Supervisor” OR “Audio Director”) AND (“Advertising” OR “Film”) AND “United States”
 
-Now produce 5 queries _exactly_ like that, and return valid JSON:
+Now produce 5 queries _exactly_ like that for each engine and each domain in {site_filters}. Return valid JSON in this shape:
 
 {{
-  "google": [ …queries here… ],
-  "bing":   [ …queries here… ],
-  "duckduckgo": [ …queries here… ]
+  "google": {{
+    "": ["site:linkedin.com/in intitle:(“Role1” OR “Role2”) AND (“Industry1” OR “Industry2”) AND “Location”", …],
+    "linkedin.com/in": ["…"],
+    "productionhub.com": ["…"]
+  }},
+  "bing": {{ … }},
+  "duckduckgo": {{ … }}
 }}
 """
-
     resp = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
@@ -48,7 +51,11 @@ Now produce 5 queries _exactly_ like that, and return valid JSON:
 
 def run_query_builder():
     st.header("🔍 Boolean Query Builder (OpenAI‑powered)")
-    engines = st.multiselect("Select engines", ["google", "bing", "duckduckgo"], default=["google"])
+    engines = st.multiselect(
+        "Select engines",
+        ["google", "bing", "duckduckgo"],
+        default=["google"]
+    )
     site_filters = st.multiselect(
         "Site filters",
         ["(any)", "linkedin.com/in", "productionhub.com", "aicpnext.com"],
@@ -63,15 +70,27 @@ def run_query_builder():
         ind_list = [i.strip() for i in industries.split(",") if i.strip()]
         loc_list = [l.strip() for l in locations.split(",") if l.strip()]
 
-        results = generate_queries_via_api(role_list, ind_list, loc_list, engines, site_filters)
+        results = generate_queries_via_api(
+            role_list,
+            ind_list,
+            loc_list,
+            engines,
+            site_filters
+        )
 
         for eng, buckets in results.items():
             with st.expander(f"{eng.upper()} queries", expanded=True):
-                for site, qs in buckets.items():
-                    label = "Global" if site in ("", "(any)") else site
-                    st.markdown(f"**{label}**")
-                    for q in qs:
+                if isinstance(buckets, dict):
+                    for site, qs in buckets.items():
+                        label = "Global" if site in ("", "(any)") else site
+                        st.markdown(f"**{label}**")
+                        for q in qs:
+                            st.code(q, language="bash")
+                elif isinstance(buckets, list):
+                    for q in buckets:
                         st.code(q, language="bash")
+                else:
+                    st.write(buckets)
 
 
 # ————————————————
@@ -88,32 +107,38 @@ def get_tags(title, artist, year, token):
         for key in ("style", "genre", "format", "label"):
             vals = res.get(key)
             if isinstance(vals, list):
-                tags += vals
+                tags.extend(vals)
             elif vals:
                 tags.append(vals)
-        seen = set(); clean = []
+        seen = set()
+        clean = []
         for t in tags:
             ts = str(t).strip()
             if ts and ts not in seen:
-                seen.add(ts); clean.append(ts)
+                seen.add(ts)
+                clean.append(ts)
         return ", ".join(clean)
     except Exception:
         return ""
+
 
 def run_udio_tag_builder():
     st.header("🎵 Discogs → Udio Tag Builder")
     token = st.text_input("Discogs API Token", type="password")
     st.markdown("Upload a CSV (title,artist,year) or paste lines.")
-    mode = st.radio("", ["Upload CSV","Paste Data"])
+    mode = st.radio("", ["Upload CSV", "Paste Data"])
     df = None
+
     if mode == "Upload CSV":
         up = st.file_uploader("CSV file", type=["csv"])
-        if up: df = pd.read_csv(up)
+        if up:
+            df = pd.read_csv(up)
     else:
         txt = st.text_area("Paste lines like title,artist,year")
         if txt:
             rows = [l.split(",") for l in txt.splitlines() if l.strip()]
-            df = pd.DataFrame(rows, columns=["title","artist","year"])
+            df = pd.DataFrame(rows, columns=["title", "artist", "year"])
+
     if df is not None and st.button("Build Tags"):
         df["tags"] = df.apply(lambda x: get_tags(x.title, x.artist, x.year, token), axis=1)
         st.dataframe(df)
@@ -127,6 +152,7 @@ def main():
     st.set_page_config(page_title="Discogs→Udio", layout="wide")
     st.sidebar.header("Tool Module")
     module = st.sidebar.selectbox("Choose module", ["Search Tools", "Udio Tags"])
+
     if module == "Search Tools":
         run_query_builder()
     else:
@@ -135,3 +161,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
