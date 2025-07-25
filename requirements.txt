@@ -1,4 +1,6 @@
 streamlit==1.37.0
-requests
-pandas
 openai
+requests
+beautifulsoup4
+dnspython
+pandas
