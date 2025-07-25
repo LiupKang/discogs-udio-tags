@@ -51,6 +51,7 @@ Now produce 5 queries _exactly_ like that for each engine and each domain in {si
 
 def run_query_builder():
     st.header("🔍 Boolean Query Builder (OpenAI‑powered)")
+
     engines = st.multiselect(
         "Select engines",
         ["google", "bing", "duckduckgo"],
@@ -66,6 +67,11 @@ def run_query_builder():
     locations = st.text_input("Locations", "United States,UK")
 
     if st.button("Generate Queries"):
+        # Validation guard
+        if not roles.strip() or not industries.strip() or not locations.strip():
+            st.error("Please fill in Roles, Industries, and Locations before generating queries.")
+            return
+
         role_list = [r.strip() for r in roles.split(",") if r.strip()]
         ind_list = [i.strip() for i in industries.split(",") if i.strip()]
         loc_list = [l.strip() for l in locations.split(",") if l.strip()]
@@ -161,4 +167,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
