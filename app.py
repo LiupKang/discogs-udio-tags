@@ -79,7 +79,7 @@ Return valid JSON with the same shape:
 }}
 """
     resp = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         messages=[{"role":"user","content":prompt}],
         temperature=0.0,
     )
@@ -134,7 +134,7 @@ def run_query_builder():
 # ————————————————
 def get_tags(title, artist, year, token):
     url = "https://api.discogs.com/database/search"
-    params = {"artist": artist, "release_title": title, "year": year, "token": token}
+    params = {"artist": title, "release_title": artist, "year": year, "token": token}
     try:
         r = requests.get(url, params=params, timeout=10); r.raise_for_status()
         res = r.json().get("results", [])[0]
@@ -145,7 +145,6 @@ def get_tags(title, artist, year, token):
                 tags.extend(vals)
             elif vals:
                 tags.append(vals)
-        # dedupe
         seen, clean = set(), []
         for t in tags:
             ts = str(t).strip()
@@ -161,7 +160,7 @@ def run_udio_tag_builder():
     st.markdown("Upload a CSV (title,artist,year) or paste lines.")
     mode = st.radio("", ["Upload CSV","Paste Data"])
     df = None
-    if mode=="Upload CSV":
+    if mode == "Upload CSV":
         up = st.file_uploader("CSV file", type=["csv"])
         if up: df = pd.read_csv(up)
     else:
