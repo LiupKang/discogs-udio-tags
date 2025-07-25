@@ -21,26 +21,23 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 @st.cache_data(show_spinner=False, ttl=3600)
 def generate_queries_via_api(roles, industries, locations, engines, site_filters):
     prompt = f"""
-You are an expert OSINT engineer. For each engine in {engines}, generate 5 concise Boolean search strings
-to find public professional contacts.
+You are an expert OSINT engineer.  Generate 5 concise, _full_ Boolean search strings for each engine in {engines}, matching this pattern:
 
-Instructions:
-- Roles: {roles}
-- Industries: {industries}
-- Locations: {locations}
-- Produce queries both globally (no site filter) and for each of these domains: {site_filters}.
-- Use only the operators each engine supports.
-- Return valid JSON in this shape:
+  • site:linkedin.com/in intitle:(“Role1” OR “Role2”) AND (“Industry1” OR “Industry2”) AND “Location”
+
+Example for “Music Supervisor, Audio Director” in “Advertising, Film” for “United States” on Google:
+
+  site:linkedin.com/in intitle:(“Music Supervisor” OR “Audio Director”) AND (“Advertising” OR “Film”) AND “United States”
+
+Now produce 5 queries _exactly_ like that, and return valid JSON:
+
 {{
-  "google": {{
-    "": ["global query1", "global query2", ...],
-    "linkedin.com/in": ["…linkedin queries…"],
-    "productionhub.com": ["…directory queries…"]
-  }},
-  "bing": {{ ... }},
-  "duckduckgo": {{ ... }}
+  "google": [ …queries here… ],
+  "bing":   [ …queries here… ],
+  "duckduckgo": [ …queries here… ]
 }}
 """
+
     resp = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
