@@ -1,4 +1,4 @@
-# app.py
+# File: app.py
 
 import os
 import json
@@ -29,23 +29,18 @@ ENGINE_PROFILES = {
 def build_base_query(roles, industries, locations, engine, site_filter, advanced_filters):
     ops = ENGINE_PROFILES.get(engine, {})
     parts = []
-    # site:DOMAIN
     if ops.get("site") and site_filter not in ("(any)", ""):
         parts.append(f"site:{site_filter}")
-    # intitle:(roles)
     if ops.get("intitle"):
         joined_roles = " OR ".join(f'"{r}"' for r in roles)
         parts.append(f'intitle:({joined_roles})')
-    # (industries) AND (locations)
     joined_inds = " OR ".join(f'"{i}"' for i in industries)
     joined_locs = " OR ".join(f'"{l}"' for l in locations)
     parts.append(f'({joined_inds})')
     parts.append(f'({joined_locs})')
-    # advanced filters
     for af in advanced_filters:
         if af:
             parts.append(af)
-    # glue with AND
     return " AND ".join(parts)
 
 # ————————————————
@@ -53,7 +48,6 @@ def build_base_query(roles, industries, locations, engine, site_filter, advanced
 # ————————————————
 @st.cache_data(show_spinner=False, ttl=3600)
 def generate_queries_via_api(roles, industries, locations, engines, site_filters, advanced_filters):
-    # 1) build base queries
     base = {
         eng: {
             sf: build_base_query(roles, industries, locations, eng, sf, advanced_filters)
@@ -61,7 +55,6 @@ def generate_queries_via_api(roles, industries, locations, engines, site_filters
         }
         for eng in engines
     }
-    # 2) prompt GPT to produce variants
     prompt = f"""
 You are an expert OSINT engineer. Below are base Boolean queries for each engine and site filter:
 {json.dumps(base, indent=2)}
@@ -102,7 +95,6 @@ def run_query_builder():
     adv_text = st.text_input("Advanced filters (comma-separated)", "-Spotify,filetype:pdf,AROUND(5)")
 
     if st.button("Generate Queries"):
-        # validate
         if not (roles.strip() and industries.strip() and locations.strip()):
             st.error("Please fill in Roles, Industries, and Locations.")
             return
@@ -136,21 +128,19 @@ def get_tags(title, artist, year, token):
     url = "https://api.discogs.com/database/search"
     params = {"artist": title, "release_title": artist, "year": year, "token": token}
     try:
-        r = requests.get(url, params=params, timeout=10); r.raise_for_status()
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
         res = r.json().get("results", [])[0]
-        tags = []
+        tags, seen = [], set()
         for key in ("style","genre","format","label"):
             vals = res.get(key)
             if isinstance(vals, list):
-                tags.extend(vals)
-            elif vals:
-                tags.append(vals)
-        seen, clean = set(), []
-        for t in tags:
-            ts = str(t).strip()
-            if ts and ts not in seen:
-                seen.add(ts); clean.append(ts)
-        return ", ".join(clean)
+                for v in vals:
+                    if v and v not in seen:
+                        seen.add(v); tags.append(v)
+            elif vals and vals not in seen:
+                seen.add(vals); tags.append(vals)
+        return ", ".join(tags)
     except Exception:
         return ""
 
@@ -160,15 +150,27 @@ def run_udio_tag_builder():
     st.markdown("Upload a CSV (title,artist,year) or paste lines.")
     mode = st.radio("", ["Upload CSV","Paste Data"])
     df = None
+
     if mode == "Upload CSV":
         up = st.file_uploader("CSV file", type=["csv"])
         if up:
             df = pd.read_csv(up)
+
     else:
         txt = st.text_area("Paste lines like title,artist,year")
         if txt:
-            rows = [l.split(",") for l in txt.splitlines() if l.strip()]
+            rows = []
+            for line in txt.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) != 3:
+                    st.error(f"Line not valid CSV (title,artist,year): “{line}”")
+                    return
+                rows.append(parts)
             df = pd.DataFrame(rows, columns=["title","artist","year"])
+
     if df is not None and st.button("Build Tags"):
         df["tags"] = df.apply(lambda x: get_tags(x.title, x.artist, x.year, token), axis=1)
         st.dataframe(df)
@@ -181,7 +183,7 @@ def main():
     st.set_page_config(page_title="Discogs→Udio", layout="wide")
     st.sidebar.header("Tool Module")
     module = st.sidebar.selectbox("Choose module", ["Search Tools","Udio Tags"])
-    if module=="Search Tools":
+    if module == "Search Tools":
         run_query_builder()
     else:
         run_udio_tag_builder()
