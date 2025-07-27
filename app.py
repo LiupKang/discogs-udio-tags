@@ -86,12 +86,12 @@ def run_query_builder():
     adv_text = st.text_input("Advanced filters (comma-separated)", "-Spotify,filetype:pdf,AROUND(5)")
 
     if st.button("Generate Queries"):
-        if not (roles and industries and locations):
-            st.error("Fill in Roles, Industries, and Locations.")
+        if not (roles.strip() and industries.strip() and locations.strip()):
+            st.error("Please fill in Roles, Industries, and Locations.")
             return
-        role_list = [r.strip() for r in roles.split(",")]
-        ind_list  = [i.strip() for i in industries.split(",")]
-        loc_list  = [l.strip() for l in locations.split(",")]
+        role_list = [r.strip() for r in roles.split(",") if r.strip()]
+        ind_list  = [i.strip() for i in industries.split(",") if i.strip()]
+        loc_list  = [l.strip() for l in locations.split(",") if l.strip()]
         adv_list  = [f.strip() for f in adv_text.split(",") if f.strip()]
 
         results = generate_queries_via_api(
@@ -110,10 +110,10 @@ def run_query_builder():
                         st.code(q)
 
 # ————————————————
-#  Discogs Udio Tag Builder Config
+#  Discogs → Udio Tag Builder Config
 # ————————————————
 BASE = "https://api.discogs.com"
-UA = {"User-Agent": "DiscogsUdioTagger/0.1 (you@example.com)"}
+UA = {"User-Agent": "DiscogsUdioTagger/0.1 (contact: you@example.com)"}
 DEFAULT_MAX_TAGS = 12
 SLEEP_BETWEEN = 0.6
 
@@ -133,12 +133,14 @@ def clean_tokens(tokens):
     seen, out = set(), []
     for t in cleaned:
         if t not in seen:
-            seen.add(t); out.append(t)
+            seen.add(t)
+            out.append(t)
     return out
 
 def discogs_search(token, title, artist="", year=""):
     params = {"type": "release", "per_page": 5, "token": token, "q": f"{title} {artist}".strip()}
-    if year: params["year"] = year
+    if year:
+        params["year"] = year
     r = requests.get(f"{BASE}/database/search", headers=UA, params=params, timeout=30)
     r.raise_for_status()
     return r.json().get("results", [])
@@ -157,7 +159,8 @@ def score_result(r, title_low, artist_low):
     return score
 
 def choose_best(results, title, artist):
-    if not results: return None
+    if not results:
+        return None
     return max(results, key=lambda r: score_result(r, title.lower(), artist.lower()))
 
 def build_tag_list(rel_json, max_tags):
@@ -174,19 +177,18 @@ def build_tag_list(rel_json, max_tags):
     return clean_tokens(tokens)[:max_tags]
 
 # ————————————————
-#  Natural-language line parser (Python-first)
+#  Natural-language line parser (enhanced)
 # ————————————————
 def parse_line_natively(line):
-    # Pattern: "Title - Artist, Year"
-    m = re.match(r'^(?P<title>.+?)\s*[-–]\s*(?P<artist>.+?)(?:,\s*(?P<year>\d{4}))?$', line)
+    # Try hyphen or "by" patterns
+    m = re.match(r'^(?P<title>.+?)\s*[-–]\s*(?P<artist>.+?)(?:,\s*(?P<year>\d{4}s?))?$', line, re.I)
     if m:
         return m.group('title').strip(), m.group('artist').strip(), m.group('year') or ""
-    # Pattern: "Title by Artist, Year"
-    m = re.match(r'^(?P<title>.+?) by (?P<artist>.+?)(?:,\s*(?P<year>\d{4}))?$', line, re.I)
+    m = re.match(r'^(?P<title>.+?) by (?P<artist>.+?)(?:,\s*(?P<year>\d{4}s?))?$', line, re.I)
     if m:
         return m.group('title').strip(), m.group('artist').strip(), m.group('year') or ""
-    # CSV fallback
-    parts = [p.strip() for p in line.split(",")]
+    # Fallback: split on last two commas
+    parts = [p.strip() for p in line.rsplit(",", 2)]
     if len(parts) == 3:
         return parts[0], parts[1], parts[2]
     return None
@@ -194,7 +196,7 @@ def parse_line_natively(line):
 @st.cache_data(show_spinner=False, ttl=3600)
 def parse_ambiguous_with_gpt(lines):
     prompt = (
-        "Parse these song lines into JSON array of {title,artist,year} (year empty if unknown):"
+        "Parse these song lines into a JSON array of {title,artist,year} (year empty if unknown):\n"
         f"{json.dumps(lines)}"
     )
     resp = openai.chat.completions.create(
@@ -222,9 +224,12 @@ def run_udio_tag_builder():
         uploaded = st.file_uploader("Drop CSV/XLSX here", type=["csv","xls","xlsx"])
     with col2:
         manual = st.text_area(
-            "…or paste natural lines: Title - Artist, Year (optional)",
+            "…or paste song lines (Title - Artist, Year optional)",
             height=150,
-            placeholder="Bohemian Rhapsody - Queen, 1975\nBlinding Lights by The Weeknd"
+            placeholder=(
+                "Bohemian Rhapsody - Queen, 1975\n"
+                "The Big Beat (Themes For Radio, Film, TV), Alan Hawkshaw, 1970s"
+            )
         )
     st.divider()
     max_tags = st.slider("Max tags per line", 5, 20, DEFAULT_MAX_TAGS)
@@ -232,50 +237,62 @@ def run_udio_tag_builder():
     if not run:
         return
 
-    # Ingest inputs
+    # Ingest
     if uploaded:
         try:
-            df_in = read_uploaded_file(uploaded)
+            raw = uploaded.read()
+            uploaded.seek(0)
+            if uploaded.name.lower().endswith((".xls", ".xlsx")):
+                df_in = pd.read_excel(io.BytesIO(raw), dtype=str).fillna("")
+            else:
+                df_in = pd.read_csv(
+                    io.BytesIO(raw), dtype=str, sep=None, engine="python", on_bad_lines="skip"
+                ).fillna("")
+            for col in ["title","artist","year"]:
+                if col not in df_in.columns:
+                    df_in[col] = ""
+            df_in = df_in[["title","artist","year"]]
         except Exception as e:
             st.error(str(e)); return
     else:
         lines = [l for l in manual.splitlines() if l.strip()]
         parsed, ambiguous = [], []
         for line in lines:
-            res = parse_line_natively(line)
-            if res:
-                parsed.append(res)
+            out = parse_line_natively(line)
+            if out:
+                parsed.append(out)
             else:
                 ambiguous.append(line)
         if ambiguous:
             try:
-                amb_data = parse_ambiguous_with_gpt(ambiguous)
-                parsed.extend((item["title"], item["artist"], item["year"]) for item in amb_data)
+                amb = parse_ambiguous_with_gpt(ambiguous)
+                for item in amb:
+                    parsed.append((item.get("title",""), item.get("artist",""), item.get("year","")))
             except Exception as e:
                 st.error("Parsing error: " + str(e)); return
         df_in = pd.DataFrame(parsed, columns=["title","artist","year"])
 
     # Build tags
-    out_rows, total = [], len(df_in)
-    progress = st.progress(0.0)
-    for i, row in df_in.iterrows():
+    out, total = [], len(df_in)
+    prog = st.progress(0.0)
+    for idx, row in df_in.iterrows():
         title, artist, year = row["title"], row["artist"], row["year"]
         label = f"{title} - {artist}".strip(" -")
         try:
-            results = discogs_search(discogs_token, title, artist, year)
-            best = choose_best(results, title, artist)
+            res = discogs_search(discogs_token, title, artist, year)
+            best = choose_best(res, title, artist)
             tags = build_tag_list(get_release(discogs_token, best["id"]), max_tags) if best else ["NO_MATCH"]
         except Exception as e:
             tags = [f"ERROR: {e}"]
-        out_rows.append({"input_title": label, "udio_tags": ", ".join(tags)})
-        progress.progress((i + 1) / total)
+        out.append({"input_title": label, "udio_tags": ", ".join(tags)})
+        prog.progress((idx + 1) / total)
         time.sleep(SLEEP_BETWEEN)
 
-    df_out = pd.DataFrame(out_rows)
+    df_out = pd.DataFrame(out)
     st.success("Done.")
     st.dataframe(df_out, use_container_width=True)
     st.download_button("Download CSV", df_out.to_csv(index=False), "prompts.csv", "text/csv")
-    st.markdown("### Copy tag lines")
+    st.markdown("### Copy individual tag lines")
     for _, r in df_out.iterrows():
         st.code(r["udio_tags"])
 
@@ -285,8 +302,8 @@ def run_udio_tag_builder():
 def main():
     st.set_page_config(page_title="Discogs→Udio", layout="wide")
     st.sidebar.header("Tool Module")
-    choice = st.sidebar.selectbox("Choose module", ["Search Tools", "Udio Tag Builder"])
-    if choice == "Search Tools":
+    mode = st.sidebar.selectbox("Choose module", ["Search Tools", "Udio Tag Builder"])
+    if mode == "Search Tools":
         run_query_builder()
     else:
         run_udio_tag_builder()
