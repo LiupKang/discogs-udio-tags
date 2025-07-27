@@ -8,7 +8,7 @@ import pandas as pd
 import requests
 
 # ————————————————
-#  Discogs API config
+#  Discogs API configuration
 # ————————————————
 BASE = "https://api.discogs.com"
 UA = {"User-Agent": "DiscogsUdioTagger/0.1 (contact: you@example.com)"}
@@ -68,8 +68,8 @@ def build_tag_list(rel_json, max_tags):
     formats=[f.get("name","") for f in rel_json.get("formats",[])]
     labels =[l.get("name","") for l in rel_json.get("labels",[])]
     tokens = styles + genres
-    if year:   tokens.append(year)
-    if country:tokens.append(country)
+    if year:    tokens.append(year)
+    if country: tokens.append(country)
     tokens += formats + labels
     return clean_tokens(tokens)[:max_tags]
 
@@ -100,20 +100,22 @@ def read_manual_paste(text):
     for line in text.splitlines():
         if not line.strip():
             continue
-        parts = [p.strip() for p in line.split(",")]
-        rows.append((
-            parts[0] if len(parts)>0 else "",
-            parts[1] if len(parts)>1 else "",
-            parts[2] if len(parts)>2 else ""
-        ))
+        parts = [p.strip() for p in line.split(",", 2)]  # allow commas in title
+        title  = parts[0] if len(parts) > 0 else ""
+        artist = parts[1] if len(parts) > 1 else ""
+        year   = parts[2] if len(parts) > 2 else ""
+        rows.append((title, artist, year))
     return pd.DataFrame(rows, columns=["title","artist","year"]).fillna("")
 
 # ————————————————
-#  UI
+#  UI: Discogs → Udio Tag Builder
 # ————————————————
 def run_udio_tag_builder():
     st.header("🎵 Discogs → Udio Tag Builder")
-    token = st.text_input("Discogs API Token", type="password")
+
+    # **Persistent token** from Streamlit secrets:
+    token = st.secrets["DISCOGS_TOKEN"]
+
     st.markdown("Upload a CSV/XLSX or paste lines (title,artist,year).")
     col1, col2 = st.columns(2)
     with col1:
@@ -123,40 +125,45 @@ def run_udio_tag_builder():
             "…or paste lines like `Bohemian Rhapsody, Queen, 1975`",
             height=150
         )
+
     max_tags = st.slider("Max tags per line", 5, 20, value=DEFAULT_MAX_TAGS)
-    if st.button("Build Tags", disabled=not (token and (uploaded or manual.strip()))):
-        # ingest
+    if not (uploaded or manual.strip()):
+        st.info("Provide either a file or pasted lines to build tags.")
+        return
+
+    # Ingest data
+    try:
+        df = read_uploaded_file(uploaded) if uploaded else read_manual_paste(manual)
+    except Exception as e:
+        st.error(str(e))
+        return
+
+    # Process each row
+    out_rows = []
+    progress = st.progress(0.0)
+    total = len(df)
+    for i, row in df.iterrows():
+        title, artist, year = row["title"], row["artist"], row["year"]
+        label = f"{title} - {artist}".strip(" -")
         try:
-            df = read_uploaded_file(uploaded) if uploaded else read_manual_paste(manual)
+            results = discogs_search(token, title, artist, year)
+            best    = choose_best(results, title, artist)
+            if best:
+                rel  = get_release(token, best["id"])
+                tags = build_tag_list(rel, max_tags)
+            else:
+                tags = ["NO_MATCH"]
         except Exception as e:
-            st.error(str(e))
-            return
+            tags = [f"ERROR: {e}"]
 
-        # process
-        out_rows = []
-        progress = st.progress(0.0)
-        total = len(df)
-        for i, row in df.iterrows():
-            title, artist, year = row["title"], row["artist"], row["year"]
-            label = f"{title} - {artist}".strip(" -")
-            try:
-                results = discogs_search(token, title, artist, year)
-                best    = choose_best(results, title, artist)
-                if best:
-                    rel  = get_release(token, best["id"])
-                    tags = build_tag_list(rel, max_tags)
-                else:
-                    tags = ["NO_MATCH"]
-            except Exception as e:
-                tags = [f"ERROR: {e}"]
-            out_rows.append({"input_title": label, "udio_tags": ", ".join(tags)})
-            progress.progress((i+1)/total)
-            time.sleep(SLEEP_BETWEEN)
+        out_rows.append({"input_title": label, "udio_tags": ", ".join(tags)})
+        progress.progress((i + 1) / total)
+        time.sleep(SLEEP_BETWEEN)
 
-        df_out = pd.DataFrame(out_rows)
-        st.success("Done.")
-        st.dataframe(df_out, use_container_width=True)
-        st.download_button("Download CSV", df_out.to_csv(index=False), "prompts.csv")
-        st.markdown("### Copy individual tag lines")
-        for _, r in df_out.iterrows():
-            st.code(r["udio_tags"])
+    df_out = pd.DataFrame(out_rows)
+    st.success("Done.")
+    st.dataframe(df_out, use_container_width=True)
+    st.download_button("Download CSV", df_out.to_csv(index=False), "prompts.csv")
+    st.markdown("### Copy individual tag lines")
+    for _, r in df_out.iterrows():
+        st.code(r["udio_tags"])
