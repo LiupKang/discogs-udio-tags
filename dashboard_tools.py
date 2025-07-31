@@ -4,9 +4,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 def run_dashboard():
+    st.set_page_config(page_title="Deadline Tracker Dashboard", layout="wide")
     st.title("🎯 Deadline Tracker Dashboard")
 
-    # Authenticate and load Google Sheet
+    # 🔎 DEBUG: Show all loaded secrets
+    st.write("✅ `secrets.toml` loaded keys:", st.secrets.keys())
+
+    # Authenticate with Google Sheets
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"])
     gc = gspread.authorize(creds)
 
@@ -16,6 +20,7 @@ def run_dashboard():
     data = worksheet.get_all_records()
     df = pd.DataFrame(data)
 
+    # Convert dates
     df['Due Date'] = pd.to_datetime(df['Due Date'], errors='coerce')
     df['Date Completed'] = pd.to_datetime(df['Date Completed'], errors='coerce')
 
