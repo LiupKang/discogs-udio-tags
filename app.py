@@ -1,5 +1,4 @@
 # File: app.py
-# File: app.py
 
 import streamlit as st
 from search_tools import run_query_builder
@@ -14,7 +13,6 @@ def main():
         "Udio Tag Builder",
         "Deadline Tracker Dashboard"
     ])
-
     if choice == "Search Tools":
         run_query_builder()
     elif choice == "Udio Tag Builder":
