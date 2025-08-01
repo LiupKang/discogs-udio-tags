@@ -1,16 +1,22 @@
 # File: search_tools.py
 
-import re
-import json
 import os
+import json
+import re
 import streamlit as st
 import openai
 
-# Pull key from env (set by app.py)
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# ————————————————
+#  Configure OpenAI from env or Streamlit secrets
+# ————————————————
+openai.api_key = (
+    st.secrets.get("OPENAI_API_KEY")
+    or os.getenv("OPENAI_API_KEY")
+)
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def generate_queries_via_api(roles, industries, locations, engines, site_filters):
+    # Build the OR-joined lists
     roles_fmt      = " OR ".join(f'"{r}"' for r in roles)
     industries_fmt = " OR ".join(f'"{i}"' for i in industries)
     locations_fmt  = " OR ".join(f'"{l}"' for l in locations)
@@ -22,12 +28,12 @@ Roles:    {roles_fmt}
 Industries:{industries_fmt}
 Locations: {locations_fmt}
 
-Generate 5 Boolean search strings for each engine in {engines}.  
-Use this pattern:
+Generate **5** Boolean search strings for each engine in {engines}.  
+Use this pattern exactly:
 
   [site:DOMAIN if not "(any)"] intitle:({roles_fmt}) AND ({industries_fmt}) AND ({locations_fmt})
 
-Return ONLY valid JSON shaped like:
+Return **only** valid JSON shaped like:
 
 {{
   "google":     {{ "<site_filter>": ["q1","q2",…], … }},
@@ -35,22 +41,25 @@ Return ONLY valid JSON shaped like:
   "duckduckgo": {{ … }}
 }}
 """
-    resp = openai.ChatCompletion.create(
+
+    # === NEW: use the v1.0+ API call ===
+    resp = openai.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
     )
 
     text = resp.choices[0].message.content.strip()
+    # strip triple‐backticks if GPT wrapped the JSON
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return json.loads(text)
 
 def run_query_builder():
     st.header("🔍 Boolean Query Builder")
-    engines = st.multiselect("Select engines", ["google","bing","duckduckgo"], default=["google"])
-    sites   = st.multiselect("Site filters", ["(any)","linkedin.com/in","productionhub.com"], default=["(any)"])
-    roles   = st.text_input("Roles (comma-separated)",    "Music Supervisor,Audio Director")
+    engines = st.multiselect("Select engines", ["google", "bing", "duckduckgo"], default=["google"])
+    sites   = st.multiselect("Site filters", ["(any)", "linkedin.com/in", "productionhub.com"], default=["(any)"])
+    roles   = st.text_input("Roles (comma-separated)",     "Music Supervisor,Audio Director")
     inds    = st.text_input("Industries (comma-separated)","Advertising,Film")
     locs    = st.text_input("Locations (comma-separated)", "United States,UK")
 
